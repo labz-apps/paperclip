@@ -132,6 +132,7 @@ import { CredentialModeLink } from "./onboarding/CredentialModeLink";
 import { FooterNav, type FooterPrimaryIcon } from "./onboarding/FooterNav";
 import { OnboardingHeading } from "./onboarding/OnboardingPrimitives";
 import {
+  hasPendingOnboardingImport,
   ImportExistingOrganization,
   type ImportedOrganization,
 } from "./onboarding/ImportExistingOrganization";
@@ -580,7 +581,19 @@ function OnboardingWizardInner({
   // without one and name it; a customer moving from another instance already
   // has one and imports it. `import` keeps its own actions inside the step
   // (read the package, then import), so the footer CTA is hidden in that mode.
-  const [companyMode, setCompanyMode] = useState<"new" | "import">("new");
+  // Starts on the import branch when an import from this session is still
+  // unfinished. The draft cannot carry this: the import job lives in
+  // sessionStorage under its own key, and a reload must land on the branch that
+  // can adopt it. Otherwise the step opens on "New organization" and the create
+  // path makes a second company while the first import finishes in the
+  // background.
+  const [companyMode, setCompanyMode] = useState<"new" | "import">(() =>
+    hasPendingOnboardingImport() ? "import" : "new",
+  );
+  // Set while the import branch owns a running job. The toggle below has to
+  // stop moving: an abandoned import still finishes on the server, and it would
+  // then select the imported organization after the user chose a different path.
+  const [companyImportBusy, setCompanyImportBusy] = useState(false);
 
   // Step 2
   // The name is not defaulted: a pre-filled "Chief of staff" is a choice made
@@ -1989,6 +2002,11 @@ function OnboardingWizardInner({
   function handleOrganizationImported(imported: ImportedOrganization) {
     const companyIdAtStart = createdCompanyIdRef.current;
     if (!canCommitCreatedCompany(companyIdAtStart, imported.companyId)) return;
+    // The company list drives the selection, and it does not know about the
+    // imported organization yet. Selecting first would let the provider decide
+    // the cached list is wrong and fall back to an older company, so refresh
+    // first and adopt after. The create path invalidates for the same reason.
+    queryClient.invalidateQueries({ queryKey: queryKeys.companies.all });
     setCreatedCompanyId(imported.companyId);
     createdCompanyIdRef.current = imported.companyId;
     setCreatedCompanyPrefix(imported.issuePrefix);
@@ -2639,6 +2657,8 @@ function OnboardingWizardInner({
                       type="button"
                       variant={companyMode === "new" ? "secondary" : "ghost"}
                       className="rounded-lg"
+                      aria-pressed={companyMode === "new"}
+                      disabled={companyImportBusy}
                       onClick={() => setCompanyMode("new")}
                     >
                       New organization
@@ -2647,6 +2667,8 @@ function OnboardingWizardInner({
                       type="button"
                       variant={companyMode === "import" ? "secondary" : "ghost"}
                       className="rounded-lg"
+                      aria-pressed={companyMode === "import"}
+                      disabled={companyImportBusy}
                       onClick={() => setCompanyMode("import")}
                     >
                       Import existing
@@ -2671,7 +2693,10 @@ function OnboardingWizardInner({
                       />
                     </div>
                   ) : (
-                    <ImportExistingOrganization onImported={handleOrganizationImported} />
+                    <ImportExistingOrganization
+                      onImported={handleOrganizationImported}
+                      onBusyChange={setCompanyImportBusy}
+                    />
                   )}
                 </motion.div>
               )}
